@@ -1,0 +1,106 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plant Disease Model</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, Segoe UI, sans-serif; color: #183326; background: #f2f7f2; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    main { width: min(100%, 560px); padding: 32px; background: white; border: 1px solid #dce8dc; border-radius: 18px; box-shadow: 0 12px 36px #173c2412; }
+    h1 { margin: 0 0 8px; font-size: 1.7rem; }
+    p { color: #5c7163; line-height: 1.5; }
+    .drop { display: grid; place-items: center; min-height: 190px; margin: 22px 0; padding: 18px; border: 2px dashed #9fbea4; border-radius: 14px; background: #f8fbf7; text-align: center; }
+    input { max-width: 100%; margin-top: 12px; }
+    img { display: none; max-width: 100%; max-height: 280px; object-fit: contain; border-radius: 10px; }
+    button { width: 100%; padding: 12px 18px; border: 0; border-radius: 10px; background: #267443; color: white; font-size: 1rem; font-weight: 650; cursor: pointer; }
+    button:disabled { opacity: .55; cursor: wait; }
+    #status { min-height: 24px; margin: 14px 0 0; }
+    #result { display: none; margin-top: 18px; padding: 16px; border-radius: 12px; background: #eef7ef; }
+    #result h2 { margin: 0 0 8px; font-size: 1.2rem; }
+    #scores { margin: 0; white-space: pre-wrap; font:  .9rem/1.5 ui-monospace, monospace; }
+    .hint { font-size: .88rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Plant Disease Classifier</h1>
+    <p>Choose a leaf image and send it to the Triton model running on this computer.</p>
+    <label class="drop" for="imageInput">
+      <span id="chooseText">Choose a JPG or PNG image</span>
+      <input id="imageInput" type="file" accept="image/png,image/jpeg">
+      <img id="preview" alt="Selected leaf image preview">
+    </label>
+    <button id="predictButton" disabled>Run prediction</button>
+    <p id="status" role="status"></p>
+    <section id="result" aria-live="polite">
+      <h2 id="prediction"></h2>
+      <pre id="scores"></pre>
+    </section>
+    <p class="hint">The result shows a class index. Use the training class order to map that index to a disease name.</p>
+  </main>
+  <script>
+    const input = document.getElementById('imageInput');
+    const preview = document.getElementById('preview');
+    const button = document.getElementById('predictButton');
+    const status = document.getElementById('status');
+    const result = document.getElementById('result');
+    let selectedImage = null;
+
+    input.addEventListener('change', () => {
+      const file = input.files[0];
+      selectedImage = file || null;
+      result.style.display = 'none';
+      if (!file) {
+        preview.style.display = 'none';
+        button.disabled = true;
+        return;
+      }
+      preview.src = URL.createObjectURL(file);
+      preview.style.display = 'block';
+      document.getElementById('chooseText').textContent = file.name;
+      button.disabled = false;
+      status.textContent = '';
+    });
+
+    button.addEventListener('click', async () => {
+      if (!selectedImage) return;
+      button.disabled = true;
+      status.textContent = 'Preparing image and asking Triton…';
+      result.style.display = 'none';
+      try {
+        const bitmap = await createImageBitmap(selectedImage);
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 128;
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        context.drawImage(bitmap, 0, 0, 128, 128);
+        const rgba = context.getImageData(0, 0, 128, 128).data;
+        const data = new Array(3 * 128 * 128);
+        for (let pixel = 0; pixel < 128 * 128; pixel++) {
+          data[pixel] = rgba[pixel * 4];
+          data[128 * 128 + pixel] = rgba[pixel * 4 + 1];
+          data[2 * 128 * 128 + pixel] = rgba[pixel * 4 + 2];
+        }
+        const response = await fetch('/infer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data })
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Inference request failed');
+        const scores = payload.scores;
+        const predictedIndex = scores.indexOf(Math.max(...scores));
+        document.getElementById('prediction').textContent = `Predicted class index: ${predictedIndex}`;
+        document.getElementById('scores').textContent = scores.map((score, i) => `Class ${i}: ${Number(score).toFixed(6)}`).join('\n');
+        result.style.display = 'block';
+        status.textContent = 'Inference complete.';
+      } catch (error) {
+        status.textContent = `Error: ${error.message}`;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
